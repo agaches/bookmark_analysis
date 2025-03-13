@@ -51,6 +51,12 @@ async def download_page_content(session, bookmark, config):
             # Vérifier le code de statut
             if response.status != 200:
                 logger.debug(f"Statut de réponse inattendu: {response.status} pour {url}")
+                bookmark['content'] = {
+                    'downloaded': False,
+                    'error': f'status_code: {response.status}',
+                    'download_date': datetime.now().isoformat(),
+                    'url_used': url
+                }
                 return bookmark
             
             # Déterminer le type MIME
@@ -111,94 +117,32 @@ async def download_page_content(session, bookmark, config):
             
     except aiohttp.ClientError as e:
         logger.debug(f"Erreur lors du téléchargement de {url}: {str(e)}")
+        bookmark['content'] = {
+            'downloaded': False,
+            'error': f'client_error: {str(e)}',
+            'download_date': datetime.now().isoformat(),
+            'url_used': url
+        }
     except asyncio.TimeoutError:
         logger.debug(f"Timeout lors du téléchargement de {url}")
+        bookmark['content'] = {
+            'downloaded': False,
+            'error': 'timeout',
+            'download_date': datetime.now().isoformat(),
+            'url_used': url
+        }
     except Exception as e:
         logger.debug(f"Exception inattendue pour {url}: {str(e)}")
+        bookmark['content'] = {
+            'downloaded': False,
+            'error': f'unexpected_error: {str(e)}',
+            'download_date': datetime.now().isoformat(),
+            'url_used': url
+        }
     
     return bookmark
 
-async def download_content(bookmarks, **config):
-    """
-    Fonction principale pour télécharger le contenu des pages web des bookmarks.
-    
-    Args:
-        bookmarks (list): Liste des bookmarks dont le contenu doit être téléchargé.
-        **config: Configuration pour le téléchargement.
-        
-    Returns:
-        list: Liste des bookmarks mis à jour avec les informations de contenu.
-    """
-    logger.info(f"Téléchargement du contenu pour {len(bookmarks)} bookmarks")
-    
-    try:
-        # Exécuter le téléchargement asynchrone
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        updated_bookmarks = loop.run_until_complete(download_content_async(bookmarks, config))
-        loop.close()
-        
-        # Compter les résultats
-        downloaded = sum(1 for b in updated_bookmarks if b.get('content', {}).get('downloaded', False))
-        
-        logger.info(f"Téléchargement terminé: {downloaded} pages téléchargées sur {len(bookmarks)} bookmarks")
-        
-        return updated_bookmarks
-    
-    except Exception as e:
-        logger.error(f"Erreur lors du téléchargement du contenu: {e}")
-        return bookmarks
-
-if __name__ == "__main__":
-    # Test du module
-    import sys
-    
-    if len(sys.argv) != 2:
-        print("Usage: python content_downloader.py <bookmarks.json>")
-        sys.exit(1)
-    
-    # Configuration du logging pour les tests
-    logging.basicConfig(level=logging.INFO)
-    
-    # Charger les bookmarks
-    try:
-        with open(sys.argv[1], 'r', encoding='utf-8') as f:
-            bookmarks = json.load(f)
-    except Exception as e:
-        print(f"Erreur lors du chargement du fichier JSON: {e}")
-        sys.exit(1)
-    
-    # Limiter à 5 bookmarks pour les tests
-    test_bookmarks = bookmarks[:5]
-    
-    # Configuration de test
-    config = {
-        'timeout': 30,
-        'delay': 2,
-        'user_agent': 'BookmarkAnalyzer-Test/1.0',
-        'output_dir': 'output'
-    }
-    
-    # Créer le dossier de sortie
-    os.makedirs(os.path.join(config['output_dir'], 'data/content'), exist_ok=True)
-    
-    # Télécharger le contenu
-    updated_bookmarks = download_content(test_bookmarks, **config)
-    
-    # Afficher les résultats
-    for bookmark in updated_bookmarks:
-        content = bookmark.get('content', {})
-        if content.get('downloaded', False):
-            print(f"URL: {bookmark['url']}")
-            print(f"  Téléchargé: {content['downloaded']}")
-            print(f"  Chemin: {content['path']}")
-            print(f"  Taille: {content['size']} octets")
-            print(f"  Type MIME: {content['mime_type']}")
-            print()
-        else:
-            print(f"URL: {bookmark['url']}")
-            print(f"  Non téléchargé (inaccessible ou erreur)")
-            print()_with_delay(session, bookmark, config, additional_delay=0):
+async def download_content_with_delay(session, bookmark, config, additional_delay=0):
     """
     Télécharge le contenu d'une page avec un délai.
     
@@ -269,13 +213,109 @@ async def download_content_async(bookmarks, config):
             updated_bookmarks.append(bookmark)
         
         # Ajouter les bookmarks non téléchargeables
+        non_downloaded = []
         for bookmark in bookmarks:
             if not bookmark['status'].get('accessible', False):
-                updated_bookmarks.append(bookmark)
+                bookmark['content'] = {
+                    'downloaded': False,
+                    'error': 'inaccessible_url',
+                    'download_date': datetime.now().isoformat()
+                }
+                non_downloaded.append(bookmark)
+        
+        updated_bookmarks.extend(non_downloaded)
         
         # Trier les bookmarks par ID pour maintenir l'ordre original
         updated_bookmarks.sort(key=lambda b: b['id'])
         
         return updated_bookmarks
 
-def download_content
+def download_content(bookmarks, **config):
+    """
+    Fonction principale pour télécharger le contenu des pages web des bookmarks.
+    
+    Args:
+        bookmarks (list): Liste des bookmarks dont le contenu doit être téléchargé.
+        **config: Configuration pour le téléchargement.
+        
+    Returns:
+        list: Liste des bookmarks mis à jour avec les informations de contenu.
+    """
+    logger.info(f"Téléchargement du contenu pour {len(bookmarks)} bookmarks")
+    
+    # Vérifier et compléter la configuration
+    if 'output_dir' not in config:
+        config['output_dir'] = 'output'
+    
+    # Créer le dossier de contenu s'il n'existe pas
+    content_dir = os.path.join(config['output_dir'], 'data/content')
+    os.makedirs(content_dir, exist_ok=True)
+    
+    try:
+        # Exécuter le téléchargement asynchrone
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        updated_bookmarks = loop.run_until_complete(download_content_async(bookmarks, config))
+        loop.close()
+        
+        # Compter les résultats
+        downloaded = sum(1 for b in updated_bookmarks if b.get('content', {}).get('downloaded', False))
+        
+        logger.info(f"Téléchargement terminé: {downloaded} pages téléchargées sur {len(bookmarks)} bookmarks")
+        
+        return updated_bookmarks
+    
+    except Exception as e:
+        logger.error(f"Erreur lors du téléchargement du contenu: {e}")
+        return bookmarks
+
+if __name__ == "__main__":
+    # Test du module
+    import sys
+    
+    if len(sys.argv) != 2:
+        print("Usage: python content_downloader.py <bookmarks.json>")
+        sys.exit(1)
+    
+    # Configuration du logging pour les tests
+    logging.basicConfig(level=logging.INFO)
+    
+    # Charger les bookmarks
+    try:
+        with open(sys.argv[1], 'r', encoding='utf-8') as f:
+            bookmarks = json.load(f)
+    except Exception as e:
+        print(f"Erreur lors du chargement du fichier JSON: {e}")
+        sys.exit(1)
+    
+    # Limiter à 5 bookmarks pour les tests
+    test_bookmarks = bookmarks[:5]
+    
+    # Configuration de test
+    config = {
+        'timeout': 30,
+        'delay': 2,
+        'user_agent': 'BookmarkAnalyzer-Test/1.0',
+        'output_dir': 'output'
+    }
+    
+    # Créer le dossier de sortie
+    os.makedirs(os.path.join(config['output_dir'], 'data/content'), exist_ok=True)
+    
+    # Télécharger le contenu
+    updated_bookmarks = download_content(test_bookmarks, **config)
+    
+    # Afficher les résultats
+    for bookmark in updated_bookmarks:
+        content = bookmark.get('content', {})
+        if content.get('downloaded', False):
+            print(f"URL: {bookmark['url']}")
+            print(f"  Téléchargé: {content['downloaded']}")
+            print(f"  Chemin: {content['path']}")
+            print(f"  Taille: {content['size']} octets")
+            print(f"  Type MIME: {content['mime_type']}")
+            print()
+        else:
+            print(f"URL: {bookmark['url']}")
+            print(f"  Non téléchargé: {content.get('error', 'inconnu')}")
+            print()
